@@ -14,5 +14,10 @@ ADD setup.py ./
 
 RUN pip3 install --no-cache-dir -e .
 
-ENTRYPOINT ["/bin/bash", "-c", "tails-server \"$@\""]
+RUN adduser --uid 1010 --disabled-password --gecos "" indy-tails-server
 
+RUN dpkg -r --force-all apt apt-get && dpkg -r --force-all debconf dpkg
+
+USER indy-tails-server
+
+ENTRYPOINT ["/bin/bash", "-c", "tails-server \"$@\""]
