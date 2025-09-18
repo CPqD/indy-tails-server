@@ -1,27 +1,63 @@
-FROM ubuntu:20.04
+# =========================
+# Stage 1: compila libindy
+# =========================
+FROM ubuntu:20.04 AS indybuilder
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Note: libindy is a dependency for tests, and it's easiest to install on ubuntu images 
-# using debian from python base images doesn't allow following steps to work, so build from ubuntu:20
+# deps de build (C/C++/Rust) e headers usados pelo Indy
+RUN apt-get update && apt-get install -y \
+    build-essential pkg-config cmake git curl ca-certificates \
+    libssl-dev libsqlite3-dev libzmq3-dev libncursesw5-dev \
+    libsodium-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install ca-certificates and add the Sovrin repository key
-RUN apt-get update && apt-get install -y ca-certificates gnupg software-properties-common && \
-    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys CE7709D068DB5E88 && \
-    add-apt-repository "deb https://repo.sovrin.org/sdk/deb bionic stable" && \
-    apt-get update && \
-    apt-get install -y libindy
+# instala Rust + Cargo (versão específica compatível com indy-sdk)
+RUN curl -sSf https://sh.rustup.rs | bash -s -- -y --default-toolchain 1.70.0
+ENV PATH=/root/.cargo/bin:$PATH
+RUN rustup default 1.70.0
 
-# Install Python 3.9 and python3-pip
-RUN apt-get install -y python3.9 python3.9-venv python3.9-dev python3-pip
+# clona e compila libindy (Release) usando libsodium do sistema (dinâmico)
+RUN git clone --depth=1 https://github.com/hyperledger/indy-sdk.git /src/indy-sdk \
+    && cd /src/indy-sdk/libindy \
+    && cargo build --release
 
-ADD requirements.txt .
-ADD requirements.dev.txt .
+# ==================================
+# Stage 2: imagem final de execução
+# ==================================
+FROM ubuntu:20.04 AS tester
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Upgrade pip using Python 3.9 to ensure compatibility
-RUN python3.9 -m pip install --upgrade pip
+# Python + libs de runtime que o Indy linka dinamicamente
+RUN apt-get update && apt-get install -y \
+    python3.9 python3.9-dev python3-pip \
+    libssl1.1 libsqlite3-0 libzmq5 libsodium23 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Use Python 3.9's pip to install dependencies from requirements files
-RUN python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
+# copia a libindy compilada
+COPY --from=indybuilder /src/indy-sdk/libindy/target/release/libindy.so /usr/lib/libindy.so
 
-ADD test ./
+# garante cache do loader atualizado
+RUN ldconfig && ldconfig -p | grep -i indy || true
 
+# (opcional) explicita caminho de libs
+ENV LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
+
+# requirements Python (ajuste os nomes se forem diferentes)
+COPY requirements.txt requirements.dev.txt ./
+RUN python3.9 -m pip install --upgrade pip \
+    && python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
+
+# verificação: falha o build se não carregar a .so
+RUN python3.9 - <<'PY'
+import ctypes, sys
+try:
+    ctypes.CDLL("libindy.so")
+    print("libindy OK")
+except OSError as e:
+    sys.exit("ERRO: " + str(e))
+PY
+
+# seu código de testes
+COPY test ./test
+WORKDIR /test
 ENTRYPOINT ["python3.9", "integration.py"]
