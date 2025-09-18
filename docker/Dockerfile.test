@@ -3,28 +3,22 @@
 # =========================
 FROM ubuntu:20.04 AS indybuilder
 ENV DEBIAN_FRONTEND=noninteractive
+
 # deps de build (C/C++/Rust) e headers usados pelo Indy
 RUN apt-get update && apt-get install -y \
     build-essential pkg-config cmake git curl ca-certificates \
     libssl-dev libsqlite3-dev libzmq3-dev libncursesw5-dev \
+    libsodium-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # instala Rust + Cargo
 RUN curl -sSf https://sh.rustup.rs | bash -s -- -y
 ENV PATH=/root/.cargo/bin:$PATH
 
-# compila libsodium estática (evita DLL hell)
-RUN cd /tmp \
-    && curl -L https://download.libsodium.org/libsodium/releases/old/libsodium-1.0.14.tar.gz | tar -xz \
-    && cd /tmp/libsodium-1.0.14 \
-    && ./configure --disable-shared \
-    && make -j"$(nproc)" \
-    && make install
-
-# clona e compila libindy com sodium_static (Release)
+# clona e compila libindy (Release) usando libsodium do sistema (dinâmico)
 RUN git clone --depth=1 https://github.com/hyperledger/indy-sdk.git /src/indy-sdk \
     && cd /src/indy-sdk/libindy \
-    && cargo build --release --features sodium_static
+    && cargo build --release
 
 # ==================================
 # Stage 2: imagem final de execução
@@ -32,18 +26,19 @@ RUN git clone --depth=1 https://github.com/hyperledger/indy-sdk.git /src/indy-sd
 FROM ubuntu:20.04 AS tester
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Python + libs de runtime que o Indy costuma linkar
+# Python + libs de runtime que o Indy linka dinamicamente
 RUN apt-get update && apt-get install -y \
     python3.9 python3.9-dev python3-pip \
-    libssl1.1 libsqlite3-0 libzmq5 ca-certificates \
+    libssl1.1 libsqlite3-0 libzmq5 libsodium23 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # copia a libindy compilada
 COPY --from=indybuilder /src/indy-sdk/libindy/target/release/libindy.so /usr/lib/libindy.so
+
 # garante cache do loader atualizado
 RUN ldconfig && ldconfig -p | grep -i indy || true
 
-# (opcional) deixa explícito o caminho de libs
+# (opcional) explicita caminho de libs
 ENV LD_LIBRARY_PATH=/usr/lib:/usr/local/lib:$LD_LIBRARY_PATH
 
 # requirements Python (ajuste os nomes se forem diferentes)
@@ -51,7 +46,7 @@ COPY requirements.txt requirements.dev.txt ./
 RUN python3.9 -m pip install --upgrade pip \
     && python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
 
-# verificação de sanidade: falha o build se não carregar a .so
+# verificação: falha o build se não carregar a .so
 RUN python3.9 - <<'PY'
 import ctypes, sys
 try:
@@ -64,6 +59,4 @@ PY
 # seu código de testes
 COPY test ./test
 WORKDIR /test
-
-# rode seu runner (ajuste se o entrypoint for outro)
 ENTRYPOINT ["python3.9", "integration.py"]
