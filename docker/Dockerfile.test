@@ -1,41 +1,57 @@
-# Stage 0: imagem que já tem Indy 1.16
-FROM ghcr.io/openwallet-foundation/aries-cloudagent-python:py3.9-indy-1.16.0-0.12-lts AS indybase
-
-# Stage 1: sua imagem real de testes
-FROM ubuntu:20.04
+# =========================
+# Stage 1: compila libindy
+# =========================
+FROM ubuntu:20.04 AS indybuilder
 ENV DEBIAN_FRONTEND=noninteractive
-
-# Python + libs que o Indy usa em runtime
+# deps de build (C/C++/Rust) e headers usados pelo Indy
 RUN apt-get update && apt-get install -y \
-    python3.9 python3.9-dev python3-pip libzmq5 libsodium23 ca-certificates \
+    build-essential pkg-config cmake git curl ca-certificates \
+    libssl-dev libsqlite3-dev libzmq3-dev libncursesw5-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiamos *as pastas* (sempre existem nessas imagens) para um tmp
-COPY --from=indybase /usr/lib /tmp/indy_usr_lib
-COPY --from=indybase /usr/local/lib /tmp/indy_usr_local_lib
+# instala Rust + Cargo
+RUN curl -sSf https://sh.rustup.rs | bash -s -- -y
+ENV PATH=/root/.cargo/bin:$PATH
 
-# Move qualquer libindy.so* encontrada para /usr/lib e cria o link "libindy.so"
-RUN set -eux; \
-    found=""; \
-    for d in /tmp/indy_usr_lib /tmp/indy_usr_local_lib; do \
-    [ -d "$d" ] || continue; \
-    if ls "$d"/libindy.so* >/dev/null 2>&1; then \
-    cp -av "$d"/libindy.so* /usr/lib/; \
-    found="yes"; \
-    fi; \
-    done; \
-    if [ -z "$found" ]; then echo "libindy.so* não encontrada no indybase"; exit 1; fi; \
-    if [ ! -e /usr/lib/libindy.so ] && ls /usr/lib/libindy.so.* >/dev/null 2>&1; then \
-    ln -s "$(ls /usr/lib/libindy.so.* | head -n1)" /usr/lib/libindy.so; \
-    fi; \
-    ldconfig; ldconfig -p | grep -i indy
+# compila libsodium estática (evita DLL hell)
+RUN cd /tmp \
+    && curl -L https://download.libsodium.org/libsodium/releases/old/libsodium-1.0.14.tar.gz | tar -xz \
+    && cd /tmp/libsodium-1.0.14 \
+    && ./configure --disable-shared \
+    && make -j"$(nproc)" \
+    && make install
 
-# Requirements Python (ajuste os nomes se forem outros)
+# clona e compila libindy com sodium_static (Release)
+RUN git clone --depth=1 https://github.com/hyperledger/indy-sdk.git /src/indy-sdk \
+    && cd /src/indy-sdk/libindy \
+    && cargo build --release --features sodium_static
+
+# ==================================
+# Stage 2: imagem final de execução
+# ==================================
+FROM ubuntu:20.04 AS tester
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Python + libs de runtime que o Indy costuma linkar
+RUN apt-get update && apt-get install -y \
+    python3.9 python3.9-dev python3-pip \
+    libssl1.1 libsqlite3-0 libzmq5 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# copia a libindy compilada
+COPY --from=indybuilder /src/indy-sdk/libindy/target/release/libindy.so /usr/lib/libindy.so
+# garante cache do loader atualizado
+RUN ldconfig && ldconfig -p | grep -i indy || true
+
+# (opcional) deixa explícito o caminho de libs
+ENV LD_LIBRARY_PATH=/usr/lib:/usr/local/lib:$LD_LIBRARY_PATH
+
+# requirements Python (ajuste os nomes se forem diferentes)
 COPY requirements.txt requirements.dev.txt ./
-RUN python3.9 -m pip install --upgrade pip && \
-    python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
+RUN python3.9 -m pip install --upgrade pip \
+    && python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
 
-# Sanidade: falha o build se a lib não carregar
+# verificação de sanidade: falha o build se não carregar a .so
 RUN python3.9 - <<'PY'
 import ctypes, sys
 try:
@@ -45,7 +61,9 @@ except OSError as e:
     sys.exit("ERRO: " + str(e))
 PY
 
-# Seu código
+# seu código de testes
 COPY test ./test
 WORKDIR /test
+
+# rode seu runner (ajuste se o entrypoint for outro)
 ENTRYPOINT ["python3.9", "integration.py"]
