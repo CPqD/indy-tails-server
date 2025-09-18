@@ -1,19 +1,17 @@
 FROM ubuntu:20.04
 
-# Note: libindy is a dependency for tests, and it's easiest to install on ubuntu images
+# Note: libindy is a dependency for tests, and it's easiest to install on ubuntu images 
 # using debian from python base images doesn't allow following steps to work, so build from ubuntu:20
 
-# Install basic dependencies
-RUN apt-get update && apt-get install -y ca-certificates gnupg software-properties-common wget curl
+# Install ca-certificates and add the Sovrin repository key
+RUN apt-get update && apt-get install -y ca-certificates gnupg software-properties-common && \
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys CE7709D068DB5E88 && \
+    add-apt-repository "deb https://repo.sovrin.org/sdk/deb bionic stable" && \
+    apt-get update && \
+    apt-get install -y libindy
 
 # Install Python 3.9 and python3-pip
 RUN apt-get install -y python3.9 python3.9-venv python3.9-dev python3-pip
-
-# Install libindy from Sovrin repository (required for python3_indy to work)
-RUN wget -qO - https://repo.sovrin.org/sdk/deb/sovrin-archive-keyring.gpg | apt-key add - || echo "Failed to add Sovrin key" && \
-    echo "deb https://repo.sovrin.org/sdk/deb bionic stable" > /etc/apt/sources.list.d/sovrin.list || echo "Failed to add Sovrin repo" && \
-    apt-get update && \
-    apt-get install -y libindy || echo "libindy installation failed, continuing with tests"
 
 ADD requirements.txt .
 ADD requirements.dev.txt .
@@ -23,10 +21,6 @@ RUN python3.9 -m pip install --upgrade pip
 
 # Use Python 3.9's pip to install dependencies from requirements files
 RUN python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
-
-# Set up environment for libindy
-RUN echo 'export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:$LD_LIBRARY_PATH' >> /etc/environment && \
-    echo 'export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:$LD_LIBRARY_PATH' >> /root/.bashrc
 
 ADD test ./
 
