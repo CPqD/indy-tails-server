@@ -1,38 +1,38 @@
+# Stage 0: só para extrair a lib
+FROM ghcr.io/openwallet-foundation/aries-cloudagent-python:py3.9-indy-1.16.0-0.12-lts AS indybase
+
+# Stage 1: sua imagem real de testes
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-# deps de sistema e ferramentas
-RUN apt-get update && apt-get install -y \
-    ca-certificates gnupg wget curl software-properties-common lsb-release
+# Python + deps de runtime
+RUN apt-get update && apt-get install -y python3.9 python3.9-dev python3-pip libzmq5 && rm -rf /var/lib/apt/lists/*
 
-# Adiciona a chave e os repositórios da Sovrin (canal stable / bionic)
-# Obs.: apt-key é depreciado, mas em ambientes Docker efêmeros ainda é ok.
-RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys CE7709D068DB5E88 && \
-    bash -lc 'echo "deb https://repo.sovrin.org/sdk/deb bionic stable" > /etc/apt/sources.list.d/sovrin.list' && \
-    bash -lc 'echo "deb https://repo.sovrin.org/deb bionic stable" >> /etc/apt/sources.list.d/sovrin.list' && \
-    apt-get update
+# Copiamos a libindy.so do stage anterior.
+# Como o caminho da .so pode variar, copiamos dos dois lugares comuns (o que existir).
+# Se um COPY falhar porque o arquivo não existe, comente aquela linha e deixe a outra.
+COPY --from=indybase /usr/lib/libindy.so /usr/lib/libindy.so
+# COPY --from=indybase /usr/local/lib/libindy.so /usr/lib/libindy.so
 
-# Instala libindy + deps nativos que ela usa em runtime
-RUN apt-get install -y libindy libsodium23 libzmq5 && ldconfig
+# Garante cache de libs atualizado
+RUN ldconfig && ldconfig -p | grep libindy
 
-# Python 3.9 e pip
-RUN apt-get install -y python3.9 python3.9-venv python3.9-dev python3-pip
-
-# Dependências Python (use os seus requirements)
+# Instala requirements (use os seus arquivos)
 COPY requirements.txt requirements.dev.txt ./
 RUN python3.9 -m pip install --upgrade pip && \
     python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
 
-# Garante que o loader encontre bibliotecas (geralmente nem precisa, mas ajuda)
-ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:$LD_LIBRARY_PATH
-
-# Verificação rápida: falha aqui se libindy não for carregada
+# Sanidade: falha o build se a lib não carregar
 RUN python3.9 - <<'PY'
-import ctypes
-ctypes.CDLL("libindy.so")
-print("libindy OK")
+import ctypes, sys
+try:
+    ctypes.CDLL("libindy.so")
+    print("libindy OK")
+except OSError as e:
+    sys.exit("ERRO: " + str(e))
 PY
 
-# Copie seu código e rode os testes
-COPY test ./
+# Seu código de teste
+COPY test ./test
+WORKDIR /test
 ENTRYPOINT ["python3.9", "integration.py"]
