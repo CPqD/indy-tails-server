@@ -30,5 +30,4 @@ RUN echo 'export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/l
 
 ADD test ./
 
-# Default entrypoint, but can be overridden
-CMD ["python3.9", "integration.py"]
+ENTRYPOINT ["python3.9", "integration.py"]
