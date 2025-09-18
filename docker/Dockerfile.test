@@ -3,8 +3,11 @@ FROM ubuntu:20.04
 # Note: libindy is a dependency for tests, and it's easiest to install on ubuntu images 
 # using debian from python base images doesn't allow following steps to work, so build from ubuntu:20
 
-# Install basic dependencies (libindy will be provided by python3_indy package)
+# Install basic dependencies
 RUN apt-get update && apt-get install -y ca-certificates gnupg software-properties-common wget curl
+
+# Try to install libindy from Ubuntu packages (fallback approach)
+RUN apt-get install -y libindy-dev || echo "libindy-dev not available, will rely on python3_indy"
 
 # Install Python 3.9 and python3-pip
 RUN apt-get install -y python3.9 python3.9-venv python3.9-dev python3-pip
@@ -18,9 +21,10 @@ RUN python3.9 -m pip install --upgrade pip
 # Use Python 3.9's pip to install dependencies from requirements files
 RUN python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
 
-# Set up environment for libindy
-RUN echo 'export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:$LD_LIBRARY_PATH' >> /etc/environment && \
-    echo 'export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:$LD_LIBRARY_PATH' >> /root/.bashrc
+# Set up environment for libindy and update library cache
+RUN echo 'export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:/usr/lib:$LD_LIBRARY_PATH' >> /etc/environment && \
+    echo 'export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:/usr/lib:$LD_LIBRARY_PATH' >> /root/.bashrc && \
+    ldconfig
 
 ADD test ./
 
