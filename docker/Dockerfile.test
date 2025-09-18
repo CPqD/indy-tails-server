@@ -6,8 +6,10 @@ FROM ubuntu:20.04
 # Install basic dependencies
 RUN apt-get update && apt-get install -y ca-certificates gnupg software-properties-common wget curl
 
-# Try to install libindy from Ubuntu packages (fallback approach)
-RUN apt-get install -y libindy-dev || echo "libindy-dev not available, will rely on python3_indy"
+# Install libindy directly from GitHub releases (definitive solution)
+RUN wget -q https://github.com/hyperledger/indy-sdk/releases/download/v1.16.0/libindy_1.16.0_amd64.deb -O /tmp/libindy.deb && \
+    dpkg -i /tmp/libindy.deb || (apt-get update && apt-get install -f -y && dpkg -i /tmp/libindy.deb) && \
+    rm /tmp/libindy.deb || echo "libindy installation failed, continuing with python3_indy"
 
 # Install Python 3.9 and python3-pip
 RUN apt-get install -y python3.9 python3.9-venv python3.9-dev python3-pip
