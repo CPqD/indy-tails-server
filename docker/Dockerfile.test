@@ -1,23 +1,36 @@
-# Stage 0: só para extrair a lib
+# Stage 0: imagem que já tem Indy 1.16
 FROM ghcr.io/openwallet-foundation/aries-cloudagent-python:py3.9-indy-1.16.0-0.12-lts AS indybase
 
 # Stage 1: sua imagem real de testes
 FROM ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Python + deps de runtime
-RUN apt-get update && apt-get install -y python3.9 python3.9-dev python3-pip libzmq5 && rm -rf /var/lib/apt/lists/*
+# Python + libs que o Indy usa em runtime
+RUN apt-get update && apt-get install -y \
+    python3.9 python3.9-dev python3-pip libzmq5 libsodium23 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copiamos a libindy.so do stage anterior.
-# Como o caminho da .so pode variar, copiamos dos dois lugares comuns (o que existir).
-# Se um COPY falhar porque o arquivo não existe, comente aquela linha e deixe a outra.
-COPY --from=indybase /usr/lib/libindy.so /usr/lib/libindy.so
-# COPY --from=indybase /usr/local/lib/libindy.so /usr/lib/libindy.so
+# Copiamos *as pastas* (sempre existem nessas imagens) para um tmp
+COPY --from=indybase /usr/lib /tmp/indy_usr_lib
+COPY --from=indybase /usr/local/lib /tmp/indy_usr_local_lib
 
-# Garante cache de libs atualizado
-RUN ldconfig && ldconfig -p | grep libindy
+# Move qualquer libindy.so* encontrada para /usr/lib e cria o link "libindy.so"
+RUN set -eux; \
+    found=""; \
+    for d in /tmp/indy_usr_lib /tmp/indy_usr_local_lib; do \
+    [ -d "$d" ] || continue; \
+    if ls "$d"/libindy.so* >/dev/null 2>&1; then \
+    cp -av "$d"/libindy.so* /usr/lib/; \
+    found="yes"; \
+    fi; \
+    done; \
+    if [ -z "$found" ]; then echo "libindy.so* não encontrada no indybase"; exit 1; fi; \
+    if [ ! -e /usr/lib/libindy.so ] && ls /usr/lib/libindy.so.* >/dev/null 2>&1; then \
+    ln -s "$(ls /usr/lib/libindy.so.* | head -n1)" /usr/lib/libindy.so; \
+    fi; \
+    ldconfig; ldconfig -p | grep -i indy
 
-# Instala requirements (use os seus arquivos)
+# Requirements Python (ajuste os nomes se forem outros)
 COPY requirements.txt requirements.dev.txt ./
 RUN python3.9 -m pip install --upgrade pip && \
     python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
@@ -32,7 +45,7 @@ except OSError as e:
     sys.exit("ERRO: " + str(e))
 PY
 
-# Seu código de teste
+# Seu código
 COPY test ./test
 WORKDIR /test
 ENTRYPOINT ["python3.9", "integration.py"]
