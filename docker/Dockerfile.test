@@ -11,9 +11,10 @@ RUN apt-get update && apt-get install -y \
     libsodium-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# instala Rust + Cargo
-RUN curl -sSf https://sh.rustup.rs | bash -s -- -y
+# instala Rust + Cargo (versão específica compatível com indy-sdk)
+RUN curl -sSf https://sh.rustup.rs | bash -s -- -y --default-toolchain 1.70.0
 ENV PATH=/root/.cargo/bin:$PATH
+RUN rustup default 1.70.0
 
 # clona e compila libindy (Release) usando libsodium do sistema (dinâmico)
 RUN git clone --depth=1 https://github.com/hyperledger/indy-sdk.git /src/indy-sdk \
@@ -39,7 +40,7 @@ COPY --from=indybuilder /src/indy-sdk/libindy/target/release/libindy.so /usr/lib
 RUN ldconfig && ldconfig -p | grep -i indy || true
 
 # (opcional) explicita caminho de libs
-ENV LD_LIBRARY_PATH=/usr/lib:/usr/local/lib:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
 
 # requirements Python (ajuste os nomes se forem diferentes)
 COPY requirements.txt requirements.dev.txt ./
