@@ -1,35 +1,38 @@
 FROM ubuntu:20.04
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Note: libindy is a dependency for tests, and it's easiest to install on ubuntu images 
-# using debian from python base images doesn't allow following steps to work, so build from ubuntu:20
+# deps de sistema e ferramentas
+RUN apt-get update && apt-get install -y \
+    ca-certificates gnupg wget curl software-properties-common lsb-release
 
-# Install basic dependencies
-RUN apt-get update && apt-get install -y ca-certificates gnupg software-properties-common wget curl
+# Adiciona a chave e os repositórios da Sovrin (canal stable / bionic)
+# Obs.: apt-key é depreciado, mas em ambientes Docker efêmeros ainda é ok.
+RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys CE7709D068DB5E88 && \
+    bash -lc 'echo "deb https://repo.sovrin.org/sdk/deb bionic stable" > /etc/apt/sources.list.d/sovrin.list' && \
+    bash -lc 'echo "deb https://repo.sovrin.org/deb bionic stable" >> /etc/apt/sources.list.d/sovrin.list' && \
+    apt-get update
 
-# Install libindy using apt with specific version
-RUN apt-get update && \
-    (apt-get install -y libindy1.16 || apt-get install -y libindy1.15 || apt-get install -y libindy || echo "libindy not available via apt") && \
-    apt-get clean
+# Instala libindy + deps nativos que ela usa em runtime
+RUN apt-get install -y libindy libsodium23 libzmq5 && ldconfig
 
-# Install Python 3.9 and python3-pip
+# Python 3.9 e pip
 RUN apt-get install -y python3.9 python3.9-venv python3.9-dev python3-pip
 
-ADD requirements.txt .
-ADD requirements.dev.txt .
+# Dependências Python (use os seus requirements)
+COPY requirements.txt requirements.dev.txt ./
+RUN python3.9 -m pip install --upgrade pip && \
+    python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
 
-# Upgrade pip using Python 3.9 to ensure compatibility
-RUN python3.9 -m pip install --upgrade pip
+# Garante que o loader encontre bibliotecas (geralmente nem precisa, mas ajuda)
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:$LD_LIBRARY_PATH
 
-# Use Python 3.9's pip to install dependencies from requirements files
-RUN python3.9 -m pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
+# Verificação rápida: falha aqui se libindy não for carregada
+RUN python3.9 - <<'PY'
+import ctypes
+ctypes.CDLL("libindy.so")
+print("libindy OK")
+PY
 
-# Set up environment for libindy and update library cache
-RUN echo 'export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:/usr/lib:$LD_LIBRARY_PATH' >> /etc/environment && \
-    echo 'export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:/usr/lib:$LD_LIBRARY_PATH' >> /root/.bashrc && \
-    ldconfig && \
-    echo "Library paths configured:" && \
-    ldconfig -p | grep libindy || echo "libindy not found in ldconfig cache"
-
-ADD test ./
-
+# Copie seu código e rode os testes
+COPY test ./
 ENTRYPOINT ["python3.9", "integration.py"]
